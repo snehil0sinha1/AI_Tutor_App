@@ -11,7 +11,12 @@ app = Flask(__name__, static_url_path='/static', static_folder='static')
 app.secret_key = "supersecretkey" # Change this in production
 app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024 # 100MB max upload
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(app.instance_path, 'app.db')
+# Database Configuration
+database_url = os.getenv('DATABASE_URL')
+if database_url and database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///' + os.path.join(app.instance_path, 'app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize Extensions
@@ -88,6 +93,66 @@ def upload_video():
     if request.method == 'GET':
         return redirect(url_for('index'))
         
+    youtube_url = request.form.get('youtube_url')
+    
+    if youtube_url:
+        # Handle YouTube Download
+        from .utils import download_youtube_video
+        import uuid
+        
+        filename = f"youtube_{uuid.uuid4().hex}.mp4"
+        save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        if download_youtube_video(youtube_url, save_path):
+            # Check if S3 is configured
+            s3_bucket = os.getenv('AWS_BUCKET_NAME')
+            
+            if s3_bucket:
+                # Upload to S3
+                from .utils import upload_to_s3
+                s3_key = f"uploads/{current_user.id}/{filename}"
+                
+                # Open the downloaded file to upload to S3
+                with open(save_path, 'rb') as f:
+                    if upload_to_s3(f, s3_bucket, s3_key, content_type='video/mp4'):
+                        # Save to DB with S3 Key
+                        video = Video(title=f"YouTube: {youtube_url}", filename=filename, s3_key=s3_key, status="pending", author=current_user)
+                        db.session.add(video)
+                        db.session.commit()
+                        
+                        # Trigger background processing
+                        from .processing import process_video
+                        app_ctx = app.app_context()
+                        threading.Thread(target=process_video, args=(video.id, app_ctx)).start()
+                        
+                        # Cleanup local file after S3 upload
+                        os.remove(save_path)
+                        
+                        flash('YouTube video processed and uploaded to S3!')
+                        return redirect(url_for('index'))
+                    else:
+                        flash('Failed to upload YouTube video to S3')
+                        return redirect(request.url)
+            else:
+                # Local Storage
+                db_path = f"static/uploads/{filename}"
+                
+                # Save to DB
+                video = Video(title=f"YouTube: {youtube_url}", filename=filename, file_path=db_path, status="pending", author=current_user)
+                db.session.add(video)
+                db.session.commit()
+                
+                # Trigger background processing
+                from .processing import process_video
+                app_ctx = app.app_context()
+                threading.Thread(target=process_video, args=(video.id, app_ctx)).start()
+                    
+                flash('YouTube video downloaded and processing started!')
+                return redirect(url_for('index'))
+        else:
+            flash('Failed to download YouTube video')
+            return redirect(request.url)
+
     if 'video' not in request.files:
         flash('No file part')
         return redirect(request.url)
@@ -198,6 +263,17 @@ def qa_video(video_id):
         db.session.commit()
     
     return answer_data
+
+@app.route('/video/<int:video_id>/quiz', methods=['GET'])
+@login_required
+def get_video_quiz(video_id):
+    video = Video.query.get_or_404(video_id)
+    if video.author != current_user:
+        return {"error": "Unauthorized"}, 403
+        
+    from .rag import generate_quiz
+    quiz_data = generate_quiz(video)
+    return quiz_data
 
 @app.route('/api/videos/status')
 @login_required

@@ -75,3 +75,25 @@ def generate_with_retry(model, content, retries=3, initial_delay=1):
                 delay *= 2 # Exponential backoff
             else:
                 raise e
+
+def download_youtube_video(url, output_path):
+    """
+    Downloads a YouTube video using yt-dlp.
+    Returns the filename if successful, None otherwise.
+    """
+    import yt_dlp
+    
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return True
+    except Exception as e:
+        logger.error(f"Error downloading YouTube video: {e}")
+        return False

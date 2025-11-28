@@ -116,3 +116,57 @@ def ask_question(video, question):
     except Exception as e:
         logger.error(f"Q&A failed: {e}")
         return {"error": str(e)}
+
+def generate_quiz(video):
+    """
+    Generates a 5-question quiz based on the video content.
+    Returns a JSON object with questions and answers.
+    """
+    try:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return {"error": "API Key missing"}
+            
+        genai.configure(api_key=api_key)
+        
+        # Check if we have the Gemini file name
+        if not video.gemini_file_name:
+             return {"error": "Video not processed by Gemini yet."}
+
+        # Get the file reference
+        try:
+            video_file = genai.get_file(video.gemini_file_name)
+        except Exception as e:
+             logger.error(f"Could not retrieve file from Gemini: {e}")
+             return {"error": "Video file expired or not found in Gemini."}
+
+        model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+        
+        prompt = """
+        Generate a quiz with 5 multiple-choice questions based on this video.
+        Output strictly in this JSON format:
+        {
+            "questions": [
+                {
+                    "id": 1,
+                    "question": "Question text here?",
+                    "options": ["Option A", "Option B", "Option C", "Option D"],
+                    "correct_answer": 0  // Index of the correct option (0-3)
+                }
+            ]
+        }
+        """
+        
+        content_parts = [video_file, prompt]
+        if video.transcript:
+             content_parts.append(f"Transcript context: {video.transcript}")
+
+        from .utils import generate_with_retry
+        response = generate_with_retry(model, content_parts)
+        
+        import json
+        return json.loads(response.text)
+
+    except Exception as e:
+        logger.error(f"Quiz generation failed: {e}")
+        return {"error": str(e)}
