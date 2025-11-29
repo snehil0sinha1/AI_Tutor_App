@@ -86,14 +86,56 @@ def download_youtube_video(url, output_path):
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False, # Enable output for debugging
+        'no_warnings': False,
+        'nocheckcertificate': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+        }
     }
     
+    # Check for Proxy
+    proxy = os.getenv('YOUTUBE_PROXY')
+    if proxy:
+        ydl_opts['proxy'] = proxy
+        logger.info("Using proxy for YouTube download")
+
+    # Check for Cookies env var to bypass bot detection
+    cookies_content = os.getenv('YOUTUBE_COOKIES')
+    cookie_file_path = None
+    
+    if cookies_content:
+        try:
+            logger.info(f"Found YOUTUBE_COOKIES with length: {len(cookies_content)}")
+            if not cookies_content.startswith("# Netscape HTTP Cookie File"):
+                logger.warning("Cookies content does not appear to be in Netscape format! It should start with '# Netscape HTTP Cookie File'")
+
+            import tempfile
+            # Create a temp file for cookies
+            fd, cookie_file_path = tempfile.mkstemp(suffix='.txt', text=True)
+            with os.fdopen(fd, 'w') as f:
+                f.write(cookies_content)
+            ydl_opts['cookiefile'] = cookie_file_path
+            logger.info(f"Created temporary cookie file at {cookie_file_path}")
+        except Exception as e:
+            logger.error(f"Failed to create cookie file: {e}")
+
     try:
+        logger.info(f"Starting YouTube download for URL: {url}")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+        logger.info("YouTube download completed successfully")
         return True
     except Exception as e:
         logger.error(f"Error downloading YouTube video: {e}")
         return False
+    finally:
+        # Cleanup cookie file
+        if cookie_file_path and os.path.exists(cookie_file_path):
+            try:
+                os.remove(cookie_file_path)
+                logger.info("Cleaned up temporary cookie file")
+            except Exception as e:
+                logger.warning(f"Failed to remove cookie file: {e}")
